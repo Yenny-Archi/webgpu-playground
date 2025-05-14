@@ -26,7 +26,7 @@ const pass = encoder.beginRenderPass({
     {
       view: context.getCurrentTexture().createView(),
       loadOp: "clear",
-      clearValue: [0, 0, 0.3, 1],
+      clearValue: [0., 0.2, 0.7, 1],
       storeOp: "store",
     },
   ],
@@ -69,24 +69,35 @@ const vertexBufferLayout = {
   ],
 };
 
-
 // 각 셀의 활성 상태를 담을 배열 생성
 const cellStateArray = new Uint32Array(GRID_SIZE * GRID_SIZE);
 
 // 스토리지 버퍼 생성
-const cellStateStorage = device.createBuffer({
-  label : "Cell State",
-  size: cellStateArray.byteLength,
-  usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
-})
+// Create two storage buffers to hold the cell state.
+const cellStateStorage = [
+  device.createBuffer({
+    label: "Cell State A",
+    size: cellStateArray.byteLength,
+    usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+  }),
+  device.createBuffer({
+    label: "Cell State B",
+     size: cellStateArray.byteLength,
+     usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+  })
+];
 
-// 모든 세 번째 셀을 활성화 상태로 변경
-for(let i = 0; i < cellStateArray.length; i += 3) {
+// Mark every third cell of the first grid as active.
+for (let i = 0; i < cellStateArray.length; i+=3) {
   cellStateArray[i] = 1;
 }
+device.queue.writeBuffer(cellStateStorage[0], 0, cellStateArray);
 
-device.queue.writeBuffer(cellStateStorage, 0, cellStateArray);
-
+// Mark every other cell of the second grid as active.
+for (let i = 0; i < cellStateArray.length; i++) {
+  cellStateArray[i] = i % 2;
+}
+device.queue.writeBuffer(cellStateStorage[1], 0, cellStateArray);
 
 // shader
 const cellShaderModule = device.createShaderModule({
@@ -147,26 +158,55 @@ const cellPipeline = device.createRenderPipeline({
   },
 });
 
-const bindGroup = device.createBindGroup({
-  label: "Cell renderer bind group",
-  layout: cellPipeline.getBindGroupLayout(0),
-  entries: [
-    {
+const bindGroups = [
+  device.createBindGroup({
+    label: "Cell renderer bind group A",
+    layout: cellPipeline.getBindGroupLayout(0),
+    entries: [{
       binding: 0,
-      resource: { buffer: uniformBuffer },
-    },
-    {
+      resource: { buffer: uniformBuffer }
+    }, {
       binding: 1,
-      resource: { buffer: cellStateStorage}
-    }
-  ],
-});
+      resource: { buffer: cellStateStorage[0] }
+    }],
+  }),
+   device.createBindGroup({
+    label: "Cell renderer bind group B",
+    layout: cellPipeline.getBindGroupLayout(0),
+    entries: [{
+      binding: 0,
+      resource: { buffer: uniformBuffer }
+    }, {
+      binding: 1,
+      resource: { buffer: cellStateStorage[1] }
+    }],
+  })
+];
 
-pass.setPipeline(cellPipeline);
-pass.setVertexBuffer(0, vertexBuffer);
-pass.setBindGroup(0, bindGroup);
+const UPDATE_INTERVAL = 200; // Update every 200ms (5 times/sec)
+let step = 0; // Track how many simulation steps have been run
 
-pass.draw(vertices.length / 2, GRID_SIZE * GRID_SIZE); // 6 vertices
+function updateGrid() {
+  step++; // Increment the step count
+  
+  const encoder = device.createCommandEncoder();
+  const pass = encoder.beginRenderPass({
+    colorAttachments: [{
+      view: context.getCurrentTexture().createView(),
+      loadOp: "clear",
+      clearValue: { r: 0, g: 0, b: 0.4, a: 1.0 },
+      storeOp: "store",
+    }]
+  });
 
-pass.end();
-device.queue.submit([encoder.finish()]);
+  pass.setPipeline(cellPipeline);
+  pass.setBindGroup(0, bindGroups[step % 2]); // Updated!
+  pass.setVertexBuffer(0, vertexBuffer);
+  pass.draw(vertices.length / 2, GRID_SIZE * GRID_SIZE);
+
+  pass.end();
+  device.queue.submit([encoder.finish()]);
+}
+
+// Schedule updateGrid() to run repeatedly
+setInterval(updateGrid, UPDATE_INTERVAL);

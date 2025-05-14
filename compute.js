@@ -139,9 +139,57 @@ const cellShaderModule = device.createShaderModule({
   `,
 });
 
+const WORKGROUP_SIZE = 8;
+
+// compute shader
+const simulationShaderModule = device.createShaderModule({
+    label: "Game of Life simulation shader",
+    code: /* wgsl */`
+      @group(0) @binding(0) var<uniform> grid: vec2f;
+
+      @group(0) @binding(1) var<storage> cellStateIn: array<u32>;
+      @group(0) @binding(2) var<storage, read_write> cellStateOut: array<u32>;
+
+      fn cellIndex(cell: vec2u) -> u32 {
+        return cell.y * u32(grid.x) + cell.x;
+      }
+
+      @compute
+      @workgroup_size(${WORKGROUP_SIZE}, ${WORKGROUP_SIZE})
+      fn computeMain(@builtin(global_invocation_id) cell: vec3u) {
+        if (cellStateIn[cellIndex(cell.xy)] == 1) {
+            cellStateOut[cellIndex(cell.xy)] = 0;
+          } else {
+            cellStateOut[cellIndex(cell.xy)] = 1;
+          }
+      }`
+  });
+
+const bindGroupLayout = device.createBindGroupLayout({
+    label: "Cell Bind Group Layout",
+    entries: [{
+      binding: 0,
+      visibility: GPUShaderStage.VERTEX | GPUShaderStage.COMPUTE| GPUShaderStage.FRAGMENT,
+      buffer: {} 
+    }, {
+      binding: 1,
+      visibility: GPUShaderStage.VERTEX | GPUShaderStage.COMPUTE,
+      buffer: { type: "read-only-storage"} 
+    }, {
+      binding: 2,
+      visibility: GPUShaderStage.COMPUTE,
+      buffer: { type: "storage"} 
+    }]
+  });
+
+  const pipelineLayout = device.createPipelineLayout({
+    label: "Cell Pipeline Layout",
+    bindGroupLayouts: [ bindGroupLayout ],
+  });
+
 const cellPipeline = device.createRenderPipeline({
   label: "Cell pipeline",
-  layout: "auto",
+  layout: pipelineLayout,
   vertex: {
     module: cellShaderModule,
     entryPoint: "vertexMain",
@@ -158,15 +206,19 @@ const cellPipeline = device.createRenderPipeline({
   },
 });
 
-const pipelineLayout = device.createPipelineLayout({
-  label: "Cell Pipeline Layout",
-  bindGroupLayouts: [ bindGroupLayout ],
-});
+const simulationPipeline = device.createComputePipeline({
+    label: "Simulation pipeline",
+    layout: pipelineLayout,
+    compute: {
+      module: simulationShaderModule,
+      entryPoint: "computeMain",
+    }
+  });
 
 const bindGroups = [
   device.createBindGroup({
     label: "Cell renderer bind group A",
-    layout: bindGroupLayout,
+    layout: cellPipeline.getBindGroupLayout(0),
     entries: [{
       binding: 0,
       resource: { buffer: uniformBuffer }
@@ -175,36 +227,44 @@ const bindGroups = [
       resource: { buffer: cellStateStorage[0] }
     },
     {
-      binding: 2, 
-      resource: { buffer: cellStateStorage[1] }
-    }],
+        binding: 2,
+        resource: { buffer: cellStateStorage[1] }
+      }],
   }),
    device.createBindGroup({
     label: "Cell renderer bind group B",
-    layout: bindGroupLayout,
+    layout: cellPipeline.getBindGroupLayout(0),
     entries: [{
       binding: 0,
       resource: { buffer: uniformBuffer }
     }, {
       binding: 1,
       resource: { buffer: cellStateStorage[1] }
-    },
+    }, 
     {
-      binding: 2, 
-      resource: { buffer: cellStateStorage[0] }
+        binding: 2,
+        resource: { buffer: cellStateStorage[0] }
     }],
   })
 ];
-
-
 
 const UPDATE_INTERVAL = 200; // Update every 200ms (5 times/sec)
 let step = 0; // Track how many simulation steps have been run
 
 function updateGrid() {
+    const encoder = device.createCommandEncoder();
+
+    const computePass = encoder.beginComputePass();
+
+    computePass.setPipeline(simulationPipeline);
+    computePass.setBindGroup(0, bindGroups[step % 2]);  
+
+    const workgroupCount = Math.ceil(GRID_SIZE / WORKGROUP_SIZE);
+    computePass.dispatchWorkgroups(workgroupCount, workgroupCount);
+
+    computePass.end();
   step++; // Increment the step count
   
-  const encoder = device.createCommandEncoder();
   const pass = encoder.beginRenderPass({
     colorAttachments: [{
       view: context.getCurrentTexture().createView(),
@@ -223,5 +283,4 @@ function updateGrid() {
   device.queue.submit([encoder.finish()]);
 }
 
-// Schedule updateGrid() to run repeatedly
 setInterval(updateGrid, UPDATE_INTERVAL);

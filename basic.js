@@ -97,7 +97,6 @@ const cellShaderModule = device.createShaderModule({
   `,
 });
 
-// 6. 렌더링 파이프라인
 const cellPipeline = device.createRenderPipeline({
   label: "Cell pipeline",
   layout: "auto",

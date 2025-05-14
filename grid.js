@@ -26,7 +26,7 @@ const pass = encoder.beginRenderPass({
     {
       view: context.getCurrentTexture().createView(),
       loadOp: "clear",
-      clearValue: [0, 0.5, 0.7, 1],
+      clearValue: [0, 0, 0.3, 1],
       storeOp: "store",
     },
   ],
@@ -69,6 +69,25 @@ const vertexBufferLayout = {
   ],
 };
 
+
+// 각 셀의 활성 상태를 담을 배열 생성
+const cellStateArray = new Uint32Array(GRID_SIZE * GRID_SIZE);
+
+// 스토리지 버퍼 생성
+const cellStateStorage = device.createBuffer({
+  label : "Cell State",
+  size: cellStateArray.byteLength,
+  usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+})
+
+// 모든 세 번째 셀을 활성화 상태로 변경
+for(let i = 0; i < cellStateArray.length; i += 3) {
+  cellStateArray[i] = 1;
+}
+
+device.queue.writeBuffer(cellStateStorage, 0, cellStateArray);
+
+
 // shader
 const cellShaderModule = device.createShaderModule({
   label: "Cell shader",
@@ -84,13 +103,16 @@ const cellShaderModule = device.createShaderModule({
     }
 
     @group(0) @binding(0) var<uniform> grid: vec2f;
+    @group(0) @binding(1) var<storage> cellState: array<u32>;
 
     @vertex
     fn vertexMain(input: VertexInput) -> VertexOutput  {
         let i = f32(input.instance);
         let cell = vec2f(i % grid.x, floor(i / grid.x));
+        let state = f32(cellState[input.instance]);
+
         let cellOffset = cell / grid * 2; 
-        let gridPos = (input.pos + 1) / grid - 1 + cellOffset;
+        let gridPos = (input.pos * state + 1) / grid - 1 + cellOffset;
 
         var output: VertexOutput;
         output.pos = vec4f(gridPos, 0, 1);
@@ -133,6 +155,10 @@ const bindGroup = device.createBindGroup({
       binding: 0,
       resource: { buffer: uniformBuffer },
     },
+    {
+      binding: 1,
+      resource: { buffer: cellStateStorage}
+    }
   ],
 });
 
